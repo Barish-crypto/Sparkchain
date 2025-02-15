@@ -21,10 +21,16 @@ class WebSocketBot {
             const data = fs.readFileSync('config.json', 'utf8');
             const config = JSON.parse(data);
             
-            if (!config.deviceId || !config.tokens || !Array.isArray(config.tokens)) {
-                throw new Error('Invalid config format. Required fields: deviceId, tokens (array)');
+            if (!Array.isArray(config)) {
+                throw new Error('Invalid config format. Config should be an array of devices.');
             }
-            
+
+            config.forEach(device => {
+                if (!device.deviceId || !device.tokens || !Array.isArray(device.tokens)) {
+                    throw new Error('Invalid config format. Each device must have a deviceId and an array of tokens.');
+                }
+            });
+
             return config;
         } catch (error) {
             console.error(chalk.red('Error loading config:', error.message));
@@ -96,20 +102,16 @@ class WebSocketBot {
         console.log(chalk.cyan(`Received [${token.substring(0, 15)}...]:`, message));
 
         if (message.startsWith('0')) {
-            // Handle handshake
             const handshake = JSON.parse(message.substring(1));
             this.pingInterval = handshake.pingInterval;
             this.pingTimeout = handshake.pingTimeout;
-            
-            // Send connection acknowledgment
+
             setTimeout(() => {
                 if (ws.readyState === WebSocket.OPEN) {
-                    ws.send('40{"sid":"' + handshake.sid + '"}');
+                    ws.send(`40{"sid":"${handshake.sid}"}`);
                 }
             }, 500);
-
         } else if (message.startsWith('2')) {
-            // Respond to ping with pong
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send('3');
             }
@@ -124,7 +126,6 @@ class WebSocketBot {
             this.handleMessage(ws, data, token);
             messageCount++;
 
-            // Send "up" message after receiving enough ping/pong cycles
             if (!upMessageSent && messageCount >= 10) {
                 upMessageSent = true;
                 if (ws.readyState === WebSocket.OPEN) {
@@ -134,11 +135,13 @@ class WebSocketBot {
         });
     }
 
-    createConnection(token) {
+    createConnection(device, token) {
+
+
         const proxy = this.getNextProxy();
         const agent = this.getProxyAgent(proxy);
         
-        const wsUrl = `wss://ws-v2.sparkchain.ai/socket.io/?token=${token}&device_id=${this.config.deviceId}&device_version=${this.deviceVersion}&EIO=4&transport=websocket`;
+        const wsUrl = `wss://ws-v2.sparkchain.ai/socket.io/?token=${token}&device_id=${device.deviceId}&device_version=${this.deviceVersion}&EIO=4&transport=websocket`;
 
         const wsOptions = {
             headers: {
@@ -160,44 +163,36 @@ class WebSocketBot {
         this.setupPingPong(ws, token);
 
         ws.on('error', (error) => {
-            console.error(chalk.red(`Error [${token.substring(0, 15)}...]:`, error.message));
-            this.reconnect(token);
+            this.reconnect(device, token);
         });
 
-        ws.on('close', () => {
-            console.log(chalk.yellow(`Disconnected: ${token.substring(0, 15)}...`));
-            this.connections.delete(token);
-            this.reconnect(token);
-        });
     }
 
-    reconnect(token) {
-        console.log(chalk.yellow(`Attempting to reconnect: ${token.substring(0, 15)}...`));
-        setTimeout(() => {
-            if (!this.connections.has(token)) {
-                this.createConnection(token);
-            }
-        }, 5000);
+    reconnect(device, token, attempt = 1) {
+        const maxRetries = 500;  // Max retry attempts
+        const retryDelay = 5000;  // Delay between retries in ms
+        
+        if (attempt <= maxRetries) {
+            setTimeout(() => {
+                if (this.connections.has(token)) {
+                    this.createConnection(device, token);
+                }
+            }, retryDelay * attempt);  // Increasing delay between retries
+        } else {
+        }
     }
+    
 
     start() {
-        // Display banner
         console.log(banner);
-        
-        if (!this.config.tokens || this.config.tokens.length === 0) {
-            console.error(chalk.red('No tokens found in config.json'));
-            return;
-        }
-
-        console.log(chalk.green(`Starting bot with ${this.config.tokens.length} accounts`));
-        console.log(chalk.cyan(`Using ${this.proxies.length > 0 ? this.proxies.length + ' proxies' : 'direct connection'}`));
-
-        for (const token of this.config.tokens) {
-            this.createConnection(token);
-        }
+        console.log(chalk.green(`Starting bot with ${this.config.length} devices`));
+        this.config.forEach(device => {
+            device.tokens.forEach(token => {
+                this.createConnection(device, token);
+            });
+        });
     }
 }
 
-// Start the bot
 const bot = new WebSocketBot();
 bot.start();
