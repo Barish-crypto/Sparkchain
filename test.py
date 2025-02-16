@@ -1,18 +1,10 @@
-def filter_proxies_by_ports(proxies, ports):
-    filtered_proxies = []
+with open('proxies.txt', 'r') as f:
+    proxies = [proxy.strip() for proxy in f.readlines()]
+
+PORT_MAX = 65535
+proxies = [proxy for proxy in proxies if int(proxy.split(':')[-1]) <= PORT_MAX]
+
+with open('proxies.txt', 'w') as f:
     for proxy in proxies:
-        for port in ports:
-            if proxy.endswith(f":{port}"):
-                filtered_proxies.append(proxy)
-                break
-    return filtered_proxies
-
-with open('proxies55.txt', 'r') as f:
-    proxies = f.readlines()
-
-filtered_proxies = filter_proxies_by_ports(proxies, ['80', '8080', '3128'])
-
-with open('filtered_proxies.txt', 'w') as f:
-    for proxy in filtered_proxies:
-        f.write(proxy)
+        f.write(proxy + '\n')
 
