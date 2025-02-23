@@ -1,30 +1,26 @@
 const fs = require('fs');
+const path = require('path');
 
-// Function to read the config from a JSON file
-function readConfig() {
-  return JSON.parse(fs.readFileSync('config.json'));
-}
+const rl = require('readline').createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
 
-// Function to write the config to a JSON file
-function writeConfig(config) {
-  fs.writeFileSync('config.json', JSON.stringify(config, null, 2));
-}
-
-// Function to update the config
-function updateConfig() {
-  const config = readConfig();
-  const predefinedTokens = [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MjQ5MTc2LCJuYW1lIjoiQWx1bGFSMTU0MjgiLCJlbWFpbCI6Imw1YXpoMzhhQGZyZWVzb3VyY2Vjb2Rlcy5jb20iLCJyZWZlcnJlcl9pZCI6NDY3NzY4MDEsImV4cCI6MTc3MTA4OTA5MH0.TfEWkgZE-UdEEEoHXkUo0KB1SWCXFaFEwedv41QTsn0"
-  ];
-
-  for (let i = 0; i < config.length; i++) {
-    config[i].tokens[0] = predefinedTokens[i % predefinedTokens.length];
+rl.question('Nhap so luong deviceId can tao: ', (answer) => {
+  const data = [];
+  for (let i = 0; i < parseInt(answer); i++) {
+    const deviceId = `${Math.random().toString(36).substring(2, 10)}-${Math.random().toString(36).substring(2, 10)}-${Math.random().toString(36).substring(2, 10)}-${Math.random().toString(36).substring(2, 10)}`;
+    data.push({
+      deviceId,
+      tokens: [
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MjQ5MTc2LCJuYW1lIjoiQWx1bGFSMTU0MjgiLCJlbWFpbCI6Imw1YXpoMzhhQGZyZWVzb3VyY2Vjb2Rlcy5jb20iLCJyZWZlcnJlcl9pZCI6NDY3NzY4MDEsImV4cCI6MTc3MTA4OTA5MH0.TfEWkgZE-UdEEEoHXkUo0KB1SWCXFaFEwedv41QTsn0"
+      ]
+    });
   }
 
-  writeConfig(config);
-}
+  const filePath = path.join(__dirname, 'config.json');
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 
-updateConfig();
-
-console.log('config.json has been updated.');
+  rl.close();
+});
 
