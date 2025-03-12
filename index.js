@@ -81,7 +81,7 @@ class WebSocketBot {
         switch (proxy.protocol.toLowerCase()) {
             case 'socks4':
             case 'socks5':
-                return new SocksProxyAgent(proxyUrl);
+                return SocksProxyAgent(proxyUrl);
             case 'http':
             case 'https':
                 return new HttpsProxyAgent(proxyUrl);
