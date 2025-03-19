@@ -2,77 +2,89 @@ const fs = require('fs');
 const WebSocket = require('ws');
 const SocksProxyAgent = require('socks-proxy-agent');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const chalk = require('chalk');
 
-// Class WebSocketBot
+// Danh sách user-agent giả
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_2_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:88.0) Gecko/20100101 Firefox/88.0',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36'
+];
+
 class WebSocketBot {
     constructor() {
         this.config = this.loadConfig();
         this.proxies = this.loadProxies();
         this.connections = new Map();
         this.proxyIndex = 0;
-        this.pingInterval = 25000; // Default ping interval
-        this.pingTimeout = 20000;  // Default ping timeout
+        this.pingInterval = 25000;
+        this.pingTimeout = 20000;
         this.deviceVersion = '0.7.0';
+        this.isRunning = true;
+        this.connectionTimeout = 10000; // Timeout 10 giây
     }
 
-    // Load config từ config.json
+    // Load config chỉ log thành công
     loadConfig() {
-        try {
-            const data = fs.readFileSync('config.json', 'utf8');
-            const config = JSON.parse(data);
+        const data = fs.readFileSync('config.json', 'utf8');
+        const config = JSON.parse(data);
 
-            if (!Array.isArray(config)) {
-                throw new Error('Invalid config format. Config should be an array of devices.');
-            }
-
-            config.forEach(device => {
-                if (!device.deviceId || !device.tokens || !Array.isArray(device.tokens)) {
-                    throw new Error('Invalid config format. Each device must have a deviceId and an array of tokens.');
-                }
-            });
-
-            return config;
-        } catch (error) {
-            console.error('Error loading config:', error.message);
-            process.exit(1);
+        if (!Array.isArray(config)) {
+            throw new Error('Config must be an array of devices.');
         }
+
+        config.forEach((device, index) => {
+            if (!device.deviceId || !device.tokens || !Array.isArray(device.tokens)) {
+                throw new Error(`Device at index ${index} must have deviceId and an array of tokens.`);
+            }
+        });
+
+        console.log(chalk.blue(`[${this.getTimestamp()}] Loaded ${config.length} devices from config.`));
+        return config;
     }
 
-    // Parse proxy string
+    // Parse proxy không log lỗi
     parseProxy(proxyString) {
-        try {
-            let protocol, host, port;
-            if (proxyString.includes('://')) {
-                const url = new URL(proxyString);
-                protocol = url.protocol.replace(':', '');
-                host = url.hostname;
-                port = url.port;
+        let protocol, host, port;
+        if (proxyString.includes('://')) {
+            const url = new URL(proxyString);
+            protocol = url.protocol.replace(':', '');
+            host = url.hostname;
+            port = url.port;
+        } else {
+            const parts = proxyString.split(':');
+            if (parts.length === 3) {
+                [host, port, protocol] = parts;
+            } else if (parts.length === 2) {
+                [host, port] = parts;
+                protocol = 'http';
             } else {
-                const parts = proxyString.split(':');
-                if (parts.length === 3) {
-                    [host, port, protocol] = parts;
-                } else if (parts.length === 2) {
-                    [host, port] = parts;
-                    protocol = 'http';
-                }
+                return null;
             }
-            return { protocol: protocol.toLowerCase(), host, port: parseInt(port) };
-        } catch (error) {
-            console.error('Error parsing proxy:', proxyString, error.message);
+        }
+        const parsedPort = parseInt(port);
+        if (isNaN(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
             return null;
         }
+        return { protocol: protocol.toLowerCase(), host, port: parsedPort };
     }
 
-    // Load proxies từ proxies.txt
+    // Load proxies chỉ log thành công
     loadProxies() {
         try {
             const data = fs.readFileSync('proxies.txt', 'utf8');
-            return data.split('\n')
+            const proxies = data.split('\n')
                 .filter(line => line.trim())
                 .map(proxy => this.parseProxy(proxy))
                 .filter(proxy => proxy !== null);
-        } catch (error) {
-            console.log('No proxies found, using direct connection');
+
+            console.log(chalk.blue(`[${this.getTimestamp()}] Loaded ${proxies.length} proxies from proxies.txt.`));
+            return proxies;
+        } catch {
             return [];
         }
     }
@@ -101,10 +113,21 @@ class WebSocketBot {
         }
     }
 
+    // Lấy timestamp cho log
+    getTimestamp() {
+        return new Date().toISOString();
+    }
+
+    // Chọn user-agent ngẫu nhiên
+    getRandomUserAgent() {
+        const randomIndex = Math.floor(Math.random() * userAgents.length);
+        return userAgents[randomIndex];
+    }
+
     // Xử lý message nhận được
     handleMessage(ws, data, token) {
         const message = data.toString();
-        console.log(`Received [${token.substring(0, 15)}...]:`, message);
+        console.log(chalk.cyan(`[${this.getTimestamp()}] Received [${token.substring(0, 15)}...]: ${message}`));
 
         if (message.startsWith('0')) {
             const handshake = JSON.parse(message.substring(1));
@@ -136,13 +159,16 @@ class WebSocketBot {
                 upMessageSent = true;
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send('42["up",{}]');
+                    console.log(chalk.green(`[${this.getTimestamp()}] Sent "up" message for [${token.substring(0, 15)}...]`));
                 }
             }
         });
     }
 
-    // Tạo kết nối WebSocket
+    // Tạo kết nối WebSocket với user-agent ngẫu nhiên
     createConnection(device, token) {
+        if (!this.isRunning) return;
+
         const proxy = this.getNextProxy();
         const agent = this.getProxyAgent(proxy);
 
@@ -150,58 +176,86 @@ class WebSocketBot {
 
         const wsOptions = {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+                'User-Agent': this.getRandomUserAgent(), // Sử dụng user-agent ngẫu nhiên
                 'Origin': 'chrome-extension://jlpniknnodfkbmbgkjelcailjljlecch',
                 'Accept-Language': 'en-US,en;q=0.9,id;q=0.8',
                 'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits'
             },
-            agent: agent
+            agent: agent,
+            timeout: this.connectionTimeout
         };
 
         const ws = new WebSocket(wsUrl, wsOptions);
 
+        const timeout = setTimeout(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+                ws.terminate();
+                this.reconnect(device, token);
+            }
+        }, this.connectionTimeout);
+
         ws.on('open', () => {
-            console.log(`Connected: ${token.substring(0, 15)}... ${proxy ? `via ${proxy.protocol} proxy` : 'direct'}`);
+            clearTimeout(timeout);
+            console.log(chalk.green(`[${this.getTimestamp()}] Connected: ${token.substring(0, 15)}... ${proxy ? `via ${proxy.protocol} proxy` : 'direct'}`));
             this.connections.set(token, ws);
         });
 
         this.setupPingPong(ws, token);
 
-        ws.on('error', (error) => {
-            console.error(`Error [${token.substring(0, 15)}...]:`, error.message);
+        ws.on('error', () => {
+            clearTimeout(timeout);
             this.reconnect(device, token);
         });
 
         ws.on('close', () => {
-            console.log(`Disconnected: ${token.substring(0, 15)}...`);
+            clearTimeout(timeout);
+            this.connections.delete(token);
             this.reconnect(device, token);
         });
     }
 
-    // Kết nối lại khi mất kết nối
+    // Kết nối lại với retry logic
     reconnect(device, token, attempt = 1) {
+        if (!this.isRunning) return;
+
         const maxRetries = 500;
         const retryDelay = 5000;
 
         if (attempt <= maxRetries) {
-            console.log(`Reconnecting [${token.substring(0, 15)}...] (Attempt ${attempt}/${maxRetries})`);
+            console.log(chalk.yellow(`[${this.getTimestamp()}] Reconnecting [${token.substring(0, 15)}...] (Attempt ${attempt}/${maxRetries})`));
             setTimeout(() => {
                 if (this.connections.has(token)) {
                     this.createConnection(device, token);
                 }
             }, retryDelay * attempt);
-        } else {
-            console.error(`Max retries reached for [${token.substring(0, 15)}...]`);
         }
+    }
+
+    // Dừng bot
+    stop() {
+        this.isRunning = false;
+        this.connections.forEach((ws, token) => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                console.log(chalk.green(`[${this.getTimestamp()}] Disconnected [${token.substring(0, 15)}...]`));
+            }
+        });
+        this.connections.clear();
+        console.log(chalk.blue(`[${this.getTimestamp()}] Bot stopped.`));
     }
 
     // Khởi động bot
     start() {
-        console.log(`Starting bot with ${this.config.length} devices`);
+        console.log(chalk.green(`[${this.getTimestamp()}] Starting bot with ${this.config.length} devices`));
         this.config.forEach(device => {
             device.tokens.forEach(token => {
                 this.createConnection(device, token);
             });
+        });
+
+        process.on('SIGINT', () => {
+            this.stop();
+            process.exit(0);
         });
     }
 }
