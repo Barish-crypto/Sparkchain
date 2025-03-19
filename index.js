@@ -14,6 +14,7 @@ class WebSocketBot {
         this.pingInterval = 25000;
         this.pingTimeout = 20000;
         this.deviceVersion = '0.7.0';
+        this.logFile = 'bot_activity.log';
     }
 
     loadConfig() {
@@ -34,6 +35,7 @@ class WebSocketBot {
             return config;
         } catch (error) {
             console.error(chalk.red('Error loading config:', error.message));
+            this.logToFile(`Error loading config: ${error.message}`);
             process.exit(1);
         }
     }
@@ -58,6 +60,7 @@ class WebSocketBot {
             return { protocol: protocol.toLowerCase(), host, port: parseInt(port) };
         } catch (error) {
             console.error(chalk.red('Error parsing proxy:', proxyString, error.message));
+            this.logToFile(`Error parsing proxy ${proxyString}: ${error.message}`);
             return null;
         }
     }
@@ -71,6 +74,7 @@ class WebSocketBot {
                 .filter(proxy => proxy !== null);
         } catch (error) {
             console.log(chalk.yellow('No proxies found, using direct connection'));
+            this.logToFile('No proxies found, using direct connection');
             return [];
         }
     }
@@ -97,9 +101,16 @@ class WebSocketBot {
         return proxy;
     }
 
+    logToFile(message) {
+        const timestamp = new Date().toISOString();
+        const logMessage = `[${timestamp}] ${message}\n`;
+        fs.appendFileSync(this.logFile, logMessage);
+    }
+
     handleMessage(ws, data, token) {
         const message = data.toString();
         console.log(chalk.cyan(`Received [${token.substring(0, 15)}...]:`, message));
+        this.logToFile(`Received from ${token.substring(0, 15)}...: ${message}`);
 
         if (message.startsWith('0')) {
             const handshake = JSON.parse(message.substring(1));
@@ -135,9 +146,18 @@ class WebSocketBot {
         });
     }
 
+    checkConnectionStatus() {
+        setInterval(() => {
+            this.connections.forEach((ws, token) => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    console.log(chalk.yellow(`Connection lost for ${token.substring(0, 15)}..., attempting to reconnect`));
+                    this.reconnect(this.config.find(d => d.tokens.includes(token)), token);
+                }
+            });
+        }, 30000); // Check every 30 seconds
+    }
+
     createConnection(device, token) {
-
-
         const proxy = this.getNextProxy();
         const agent = this.getProxyAgent(proxy);
 
@@ -147,6 +167,9 @@ class WebSocketBot {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
                 'Origin': 'chrome-extension://jlpniknnodfkbmbgkjelcailjljlecch',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept': 'application/json, text/plain, */*',
+                'Connection': 'keep-alive',
                 'Accept-Language': 'en-US,en;q=0.9,id;q=0.8',
                 'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits'
             },
@@ -157,40 +180,54 @@ class WebSocketBot {
 
         ws.on('open', () => {
             console.log(chalk.green(`Connected: ${token.substring(0, 15)}... ${proxy ? `via ${proxy.protocol} proxy` : 'direct'}`));
+            this.logToFile(`Connected: ${token.substring(0, 15)}... ${proxy ? `via ${proxy.protocol} proxy` : 'direct'}`);
             this.connections.set(token, ws);
         });
 
-        this.setupPingPong(ws, token);
-
         ws.on('error', (error) => {
+            console.error(chalk.red(`Error for ${token.substring(0, 15)}...: ${error.message}`));
+            this.logToFile(`Error for ${token.substring(0, 15)}...: ${error.message}`);
             this.reconnect(device, token);
         });
 
+        ws.on('close', () => {
+            console.log(chalk.yellow(`Connection closed for ${token.substring(0, 15)}...`));
+            this.logToFile(`Connection closed for ${token.substring(0, 15)}...`);
+            this.connections.delete(token);
+            this.reconnect(device, token);
+        });
+
+        this.setupPingPong(ws, token);
     }
 
     reconnect(device, token, attempt = 1) {
-        const maxRetries = 500;  // Max retry attempts
-        const retryDelay = 5000;  // Delay between retries in ms
+        const maxRetries = 5;
+        const retryDelay = 5000;
 
         if (attempt <= maxRetries) {
+            console.log(chalk.yellow(`Reconnecting attempt ${attempt}/${maxRetries} for ${token.substring(0, 15)}...`));
+            this.logToFile(`Reconnecting attempt ${attempt}/${maxRetries} for ${token.substring(0, 15)}...`);
             setTimeout(() => {
-                if (this.connections.has(token)) {
+                if (!this.connections.has(token)) {
                     this.createConnection(device, token);
                 }
-            }, retryDelay * attempt);  // Increasing delay between retries
+            }, retryDelay * attempt);
         } else {
+            console.log(chalk.red(`Max retries reached for ${token.substring(0, 15)}..., giving up`));
+            this.logToFile(`Max retries reached for ${token.substring(0, 15)}..., giving up`);
         }
     }
-
 
     start() {
         console.log(banner);
         console.log(chalk.green(`Starting bot with ${this.config.length} devices`));
+        this.logToFile(`Starting bot with ${this.config.length} devices`);
         this.config.forEach(device => {
             device.tokens.forEach(token => {
                 this.createConnection(device, token);
             });
         });
+        this.checkConnectionStatus();
     }
 }
 
