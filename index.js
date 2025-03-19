@@ -3,17 +3,7 @@ const WebSocket = require('ws');
 const SocksProxyAgent = require('socks-proxy-agent');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const chalk = require('chalk');
-
-// Danh sách user-agent giả
-const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_2_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:88.0) Gecko/20100101 Firefox/88.0',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1',
-    'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36'
-];
+const UserAgent = require('user-agents'); // Thêm thư viện user-agents
 
 class WebSocketBot {
     constructor() {
@@ -26,9 +16,10 @@ class WebSocketBot {
         this.deviceVersion = '0.7.0';
         this.isRunning = true;
         this.connectionTimeout = 10000; // Timeout 10 giây
+        this.userAgentGenerator = new UserAgent(); // Khởi tạo generator user-agent
     }
 
-    // Load config chỉ log thành công
+    // Load config không log
     loadConfig() {
         const data = fs.readFileSync('config.json', 'utf8');
         const config = JSON.parse(data);
@@ -43,11 +34,10 @@ class WebSocketBot {
             }
         });
 
-        console.log(chalk.blue(`[${this.getTimestamp()}] Loaded ${config.length} devices from config.`));
         return config;
     }
 
-    // Parse proxy không log lỗi
+    // Parse proxy không log
     parseProxy(proxyString) {
         let protocol, host, port;
         if (proxyString.includes('://')) {
@@ -73,17 +63,14 @@ class WebSocketBot {
         return { protocol: protocol.toLowerCase(), host, port: parsedPort };
     }
 
-    // Load proxies chỉ log thành công
+    // Load proxies không log
     loadProxies() {
         try {
             const data = fs.readFileSync('proxies.txt', 'utf8');
-            const proxies = data.split('\n')
+            return data.split('\n')
                 .filter(line => line.trim())
                 .map(proxy => this.parseProxy(proxy))
                 .filter(proxy => proxy !== null);
-
-            console.log(chalk.blue(`[${this.getTimestamp()}] Loaded ${proxies.length} proxies from proxies.txt.`));
-            return proxies;
         } catch {
             return [];
         }
@@ -118,17 +105,14 @@ class WebSocketBot {
         return new Date().toISOString();
     }
 
-    // Chọn user-agent ngẫu nhiên
+    // Chọn user-agent ngẫu nhiên từ thư viện
     getRandomUserAgent() {
-        const randomIndex = Math.floor(Math.random() * userAgents.length);
-        return userAgents[randomIndex];
+        return this.userAgentGenerator.random().toString();
     }
 
-    // Xử lý message nhận được
+    // Xử lý message không log
     handleMessage(ws, data, token) {
         const message = data.toString();
-        console.log(chalk.cyan(`[${this.getTimestamp()}] Received [${token.substring(0, 15)}...]: ${message}`));
-
         if (message.startsWith('0')) {
             const handshake = JSON.parse(message.substring(1));
             this.pingInterval = handshake.pingInterval;
@@ -146,7 +130,7 @@ class WebSocketBot {
         }
     }
 
-    // Thiết lập ping-pong
+    // Thiết lập ping-pong không log
     setupPingPong(ws, token) {
         let upMessageSent = false;
         let messageCount = 0;
@@ -159,13 +143,12 @@ class WebSocketBot {
                 upMessageSent = true;
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send('42["up",{}]');
-                    console.log(chalk.green(`[${this.getTimestamp()}] Sent "up" message for [${token.substring(0, 15)}...]`));
                 }
             }
         });
     }
 
-    // Tạo kết nối WebSocket với user-agent ngẫu nhiên
+    // Tạo kết nối WebSocket, chỉ log khi thành công
     createConnection(device, token) {
         if (!this.isRunning) return;
 
@@ -176,7 +159,7 @@ class WebSocketBot {
 
         const wsOptions = {
             headers: {
-                'User-Agent': this.getRandomUserAgent(), // Sử dụng user-agent ngẫu nhiên
+                'User-Agent': this.getRandomUserAgent(), // User-agent ngẫu nhiên từ thư viện
                 'Origin': 'chrome-extension://jlpniknnodfkbmbgkjelcailjljlecch',
                 'Accept-Language': 'en-US,en;q=0.9,id;q=0.8',
                 'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits'
@@ -214,7 +197,7 @@ class WebSocketBot {
         });
     }
 
-    // Kết nối lại với retry logic
+    // Kết nối lại với retry logic, không log
     reconnect(device, token, attempt = 1) {
         if (!this.isRunning) return;
 
@@ -222,7 +205,6 @@ class WebSocketBot {
         const retryDelay = 5000;
 
         if (attempt <= maxRetries) {
-            console.log(chalk.yellow(`[${this.getTimestamp()}] Reconnecting [${token.substring(0, 15)}...] (Attempt ${attempt}/${maxRetries})`));
             setTimeout(() => {
                 if (this.connections.has(token)) {
                     this.createConnection(device, token);
@@ -231,22 +213,19 @@ class WebSocketBot {
         }
     }
 
-    // Dừng bot
+    // Dừng bot không log
     stop() {
         this.isRunning = false;
         this.connections.forEach((ws, token) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.close();
-                console.log(chalk.green(`[${this.getTimestamp()}] Disconnected [${token.substring(0, 15)}...]`));
             }
         });
         this.connections.clear();
-        console.log(chalk.blue(`[${this.getTimestamp()}] Bot stopped.`));
     }
 
-    // Khởi động bot
+    // Khởi động bot không log khởi động
     start() {
-        console.log(chalk.green(`[${this.getTimestamp()}] Starting bot with ${this.config.length} devices`));
         this.config.forEach(device => {
             device.tokens.forEach(token => {
                 this.createConnection(device, token);
