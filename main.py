@@ -1,3 +1,4 @@
+
 from aiohttp import (
     ClientResponseError,
     ClientSession,
@@ -7,7 +8,7 @@ from aiohttp_socks import ProxyConnector
 from fake_useragent import FakeUserAgent
 from datetime import datetime
 from colorama import *
-import asyncio, json, os, pytz
+import asyncio, json, base64, os, pytz
 
 wib = pytz.timezone('Asia/Jakarta')
 
@@ -53,23 +54,8 @@ class Sparkchain:
         minutes, seconds = divmod(remainder, 60)
         return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
     
-    def load_accounts(self):
-        filename = "accounts.json"
-        try:
-            if not os.path.exists(filename):
-                self.log(f"{Fore.RED}File {filename} Not Found.{Style.RESET_ALL}")
-                return
-
-            with open(filename, 'r') as file:
-                data = json.load(file)
-                if isinstance(data, list):
-                    return data
-                return []
-        except json.JSONDecodeError:
-            return []
-    
     async def load_proxies(self, use_proxy_choice: int):
-        filename = "proxies.txt"
+        filename = "proxy.txt"
         try:
             if use_proxy_choice == 1:
                 async with ClientSession(timeout=ClientTimeout(total=30)) as session:
@@ -121,6 +107,17 @@ class Sparkchain:
         self.account_proxies[email] = proxy
         self.proxy_index = (self.proxy_index + 1) % len(self.proxies)
         return proxy
+    
+    def decode_token(self, token: str):
+        try:
+            header, payload, signature = token.split(".")
+            decoded_payload = base64.urlsafe_b64decode(payload + "==").decode("utf-8")
+            parsed_payload = json.loads(decoded_payload)
+            email = parsed_payload["email"]
+            
+            return email
+        except Exception as e:
+            return None
     
     def mask_account(self, account):
         if "@" in account:
@@ -174,30 +171,7 @@ class Sparkchain:
                 except ValueError:
                     print(f"{Fore.RED+Style.BRIGHT}Invalid input. Enter a number.{Style.RESET_ALL}")
 
-        return nodes_count, proxy_choice,
-    
-    async def user_login(self, email: str, password: str, proxy=None, retries=5):
-        url = "https://api.sparkchain.ai/login"
-        data = json.dumps({"email":email, "password":password})
-        headers = {
-            **self.headers,
-            "Content-Length": str(len(data)),
-            "Content-Type": "application/json"
-        }
-        for attempt in range(retries):
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=120)) as session:
-                    async with session.post(url=url, headers=headers, data=data) as response:
-                        response.raise_for_status()
-                        result = await response.json()
-                        return result['access_token']
-            except (Exception, ClientResponseError) as e:
-                if attempt < retries - 1:
-                    await asyncio.sleep(5)
-                    continue
-            
-                return self.print_message(email, proxy, Fore.RED, f"GET Access Token Failed: {Fore.YELLOW + Style.BRIGHT}{str(e)}")
+        return nodes_count, proxy_choice
     
     async def user_profile(self, email: str, token: str, proxy=None, retries=5):
         url = "https://api.sparkchain.ai/profile"
@@ -293,7 +267,7 @@ class Sparkchain:
                 return self.print_message(email, proxy, Fore.RED, f"GET Device ID Failed: {Fore.YELLOW + Style.BRIGHT}{str(e)}")
         
     async def connect_websocket(self, email: str, token: str, device_id: str, proxy=None):
-        wss_url = f"wss://ws-v2.sparkchain.ai/socket.io/?token={token}&device_id={device_id}&device_version=0.7.0&EIO=4&transport=websocket"
+        wss_url = f"wss://ws-v2.sparkchain.ai/socket.io/?token={token}&device_id={device_id}&device_version=0.9.2&EIO=4&transport=websocket"
         headers = {
             "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache",
@@ -307,17 +281,15 @@ class Sparkchain:
             "Upgrade": "websocket",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
         }
-        message_1 = '40'
-        message_2 = '3'
-        message_3 = '42["up", {}]'
-
+        
         while True:
             connector = ProxyConnector.from_url(proxy) if proxy else None
             session = ClientSession(connector=connector, timeout=ClientTimeout(total=120))
             try:
                 async with session.ws_connect(wss_url, headers=headers) as wss:
 
-                    async def send_up():
+                    async def send_up(sid):
+                        message_3 = f'42{json.dumps(["up",{"id":sid}])}'
                         while True:
                             await asyncio.sleep(120)
                             await wss.send_str(message_3)
@@ -346,7 +318,7 @@ class Sparkchain:
                                     f"{Fore.CYAN + Style.BRIGHT} Received Message: {Style.RESET_ALL}"
                                     f"{Fore.BLUE + Style.BRIGHT}{response}{Style.RESET_ALL}"
                                 )
-
+                                message_1 = '40'
                                 await wss.send_str(message_1)
                                 self.print_message(email, proxy, Fore.WHITE, 
                                     f"Device ID {device_id} "
@@ -358,6 +330,7 @@ class Sparkchain:
 
                             elif response and registered:
                                 if response == "2":
+                                    message_2 = '3'
                                     await wss.send_str(message_2)
                                     print(
                                         f"{Fore.CYAN + Style.BRIGHT}[ {datetime.now().astimezone(wib).strftime('%x %X %Z')} ]{Style.RESET_ALL}"
@@ -369,7 +342,16 @@ class Sparkchain:
 
                                 else:
                                     if send_up_message is None:
-                                        send_up_message = asyncio.create_task(send_up())
+                                        result = json.loads(response[2:])
+                                        sid = result["sid"]
+                                        send_up_message = asyncio.create_task(send_up(sid))
+
+                                        self.print_message(email, proxy, Fore.WHITE, 
+                                            f"Device ID {device_id} "
+                                            f"{Fore.MAGENTA + Style.BRIGHT}-{Style.RESET_ALL}"
+                                            f"{Fore.CYAN + Style.BRIGHT} Received Message: {Style.RESET_ALL}"
+                                            f"{Fore.BLUE + Style.BRIGHT}{response}{Style.RESET_ALL}"
+                                        )
                                 
                         except Exception as e:
                             self.print_message(email, proxy, Fore.WHITE, 
@@ -411,19 +393,6 @@ class Sparkchain:
             finally:
                 await session.close()
             
-    async def process_get_access_token(self, email: str, password: str, use_proxy: bool):
-        proxy = self.get_next_proxy_for_account(email) if use_proxy else None
-        token = None
-        while token is None:
-            token = await self.user_login(email, password, proxy)
-            if not token:
-                proxy = self.rotate_proxy_for_account(email) if use_proxy else None
-                await asyncio.sleep(5)
-                continue
-            
-            self.print_message(email, proxy, Fore.GREEN, "GET Access Token Success")
-            return token
-        
     async def process_get_user_earning(self, email: str, token: str, use_proxy: bool):
         while True:
             proxy = self.get_next_proxy_for_account(email) if use_proxy else None
@@ -488,34 +457,28 @@ class Sparkchain:
             self.print_message(email, proxy, Fore.GREEN, "GET Device ID Success")
             return device_id
         
-    async def process_accounts(self, email: str, password: str, nodes_count: int, use_proxy: bool):
-        token = await self.process_get_access_token(email, password, use_proxy)
-        if token:
+    async def process_accounts(self, email: str, token: str, nodes_count: int, use_proxy: bool):
+        tasks = []
+        tasks.append(asyncio.create_task(self.process_get_user_earning(email, token, use_proxy)))
+        tasks.append(asyncio.create_task(self.process_complete_tasks(email, token, use_proxy)))
 
-            tasks = []
+        device_id = await self.process_get_device_id(email, token, use_proxy)
+        if device_id:
+            proxy = self.get_next_proxy_for_account(email) if use_proxy else None
 
-            tasks.append(asyncio.create_task(self.process_get_user_earning(email, token, use_proxy)))
-            tasks.append(asyncio.create_task(self.process_complete_tasks(email, token, use_proxy)))
-
-            device_id = await self.process_get_device_id(email, token, use_proxy)
-            if device_id:
-                proxy = self.get_next_proxy_for_account(email) if use_proxy else None
-
-                if use_proxy:
-                    for i in range(nodes_count):
-                        tasks.append(asyncio.create_task(self.connect_websocket(email, token, device_id, proxy)))
-                        proxy = self.rotate_proxy_for_account(email)
-                else:
+            if use_proxy:
+                for i in range(nodes_count):
                     tasks.append(asyncio.create_task(self.connect_websocket(email, token, device_id, proxy)))
+                    proxy = self.rotate_proxy_for_account(email)
+            else:
+                tasks.append(asyncio.create_task(self.connect_websocket(email, token, device_id, proxy)))
 
-            await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
         
     async def main(self):
         try:
-            accounts = self.load_accounts()
-            if not accounts:
-                self.log(f"{Fore.RED+Style.BRIGHT}No Accounts Loaded.{Style.RESET_ALL}")
-                return
+            with open('tokens.txt', 'r') as file:
+                tokens = [line.strip() for line in file if line.strip()]
             
             nodes_count, use_proxy_choice = self.print_question()
 
@@ -527,7 +490,7 @@ class Sparkchain:
             self.welcome()
             self.log(
                 f"{Fore.GREEN + Style.BRIGHT}Account's Total: {Style.RESET_ALL}"
-                f"{Fore.WHITE + Style.BRIGHT}{len(accounts)}{Style.RESET_ALL}"
+                f"{Fore.WHITE + Style.BRIGHT}{len(tokens)}{Style.RESET_ALL}"
             )
 
             if use_proxy:
@@ -537,16 +500,17 @@ class Sparkchain:
 
             while True:
                 tasks = []
-                for account in accounts:
-                    email = account.get('Email')
-                    password = account.get('Password')
-
-                    if "@" in email and password:
-                        tasks.append(self.process_accounts(email, password, nodes_count, use_proxy))
+                for token in tokens:
+                    if token:
+                        email = self.decode_token(token)
+                        tasks.append(asyncio.create_task(self.process_accounts(email, token, nodes_count, use_proxy)))
 
                 await asyncio.gather(*tasks)
                 await asyncio.sleep(10)
 
+        except FileNotFoundError:
+            self.log(f"{Fore.RED}File 'tokens.txt' Not Found.{Style.RESET_ALL}")
+            return
         except Exception as e:
             self.log(f"{Fore.RED+Style.BRIGHT}Error: {e}{Style.RESET_ALL}")
             raise e
